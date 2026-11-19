@@ -11,6 +11,7 @@ Status convention (không dùng True/False mơ hồ):
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Literal
 
 from google.genai import types
@@ -22,24 +23,28 @@ from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
 # Quyết định rõ ràng — tránh đảo nghĩa True/False
 InputStatus = Literal["ALLOW", "BLOCK"]
 
+_ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff\u2060\u00ad\u180e\u200e\u200f"
+
+
+def _normalize_text(text: str) -> str:
+    """Canonicalize Unicode and strip invisible zero-width separators."""
+    normalized = unicodedata.normalize("NFKC", text or "")
+    cleaned = normalized.translate(str.maketrans("", "", _ZERO_WIDTH_CHARS))
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _strip_accents(text: str) -> str:
+    """Remove Vietnamese diacritics for consistent keyword matching."""
+    decomposed = unicodedata.normalize("NFD", text or "")
+    stripped = "".join(c for c in decomposed if unicodedata.category(c) != "Mn")
+    return stripped.replace("đ", "d").replace("Đ", "D")
+
 
 # ============================================================
 # Implement detect_injection()
 #
 # Canonicalize Unicode/invisible spacing, then detect prompt injection.
 # Return ``"BLOCK"`` if injection is detected, else ``"ALLOW"``.
-#
-# Required cases:
-# - "ignore (all )?(previous|above) instructions"
-# - "you are now"
-# - "system prompt"
-# - "reveal your (instructions|prompt)"
-# - "pretend you are"
-# - "act as (a |an )?unrestricted"
-# Also handle an instruction embedded in an untrusted email/RAG document, e.g.
-# ``Ignore\u200b all previous instructions``. Do not block a benign request to
-# summarize an external bank-transfer email just because it is external data.
-# Regex is one signal, not the whole security boundary.
 # ============================================================
 
 def detect_injection(user_input: str) -> InputStatus:
@@ -51,14 +56,36 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    if not user_input or not user_input.strip():
+        return "ALLOW"
+
+    normalized = _normalize_text(user_input)
+    ascii_folded = _strip_accents(normalized)
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        r"ignore\s+(?:all\s+)?(?:previous|above|prior|earlier|system)?\s*(?:instructions?|prompts?|rules?|directives?)",
+        r"disregard\s+(?:all\s+)?(?:previous|above|prior|system)?\s*(?:instructions?|prompts?|rules?|directives?)",
+        r"forget\s+(?:all\s+)?(?:your\s+|previous\s+)?(?:instructions?|prompts?|rules?|training)",
+        r"\byou\s+are\s+now\b",
+        r"\bsystem\s*(?:prompt|instruction|override|message)s?\b",
+        r"\bdeveloper\s*(?:mode|prompt|instruction|override)\b",
+        r"(?:reveal|disclose|show|print|repeat|dump|output)\s+(?:me\s+)?(?:your\s+|the\s+)?(?:internal\s+|hidden\s+|system\s+)?(?:instructions?|prompts?|rules?|secrets?|passwords?|api\s*keys?|credentials?|configs?|notes?)",
+        r"\bpretend\s+(?:you\s+are|to\s+be)\b",
+        r"\bact\s+as\s+(?:a\s+|an\s+)?(?:unrestricted|jailbroken|evil|dan|admin|developer|system)",
+        r"\b(?:role\s*play|roleplay)\s+as\b",
+        r"\b(?:DAN|do\s+anything\s+now|jailbreak)\b",
+        r"(?:bypass|override)\s+(?:all\s+|your\s+)?(?:safety|security|guardrails?|restrictions?|filters?|rules?|instructions?)",
+        r"(?:translate|encode|convert|summarize|summarise)\s+(?:your\s+|the\s+)?(?:system\s+|internal\s+|hidden\s+)?(?:instructions?|prompts?|rules?|secrets?|passwords?|api\s*keys?|credentials?)",
+        r"(?:what\s+is|tell\s+me|give\s+me|share|confirm)\s+(?:the\s+|your\s+)?(?:admin\s+|internal\s+|system\s+|database\s+)(?:password|secret|api\s*key|credential|host)",
+        r"(?:admin[_\s]*password|sk-vinbank-secret|db\.vinbank\.internal|admin123)",
+        r"(?:bỏ\s+qua|quên)\s+(?:mọi\s+|tất\s+cả\s+|các\s+)?(?:hướng\s+dẫn|quy\s+tắc|lệnh)",
+        r"(?:tiết\s+lộ|hiển\s+thị|cho\s+(?:tôi\s+)?(?:xem|biết))\s+(?:mật\s+khẩu|api\s*key|system\s*prompt|thông\s+tin\s+nội\s+bộ|cấu\s+hình\s+nội\s+bộ|hướng\s+dẫn\s+hệ\s+thống)",
+        r"\b(?:bo\s+qua|quen)\s+(?:moi\s+|tat\s+ca\s+|cac\s+)?(?:huong\s+dan|quy\s+tac)\b",
+        r"\b(?:tiet\s+lo)\s+(?:mat\s+khau|api\s*key|thong\s+tin\s+noi\s+bo|huong\s+dan)\b",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, normalized, re.IGNORECASE) or re.search(pattern, ascii_folded, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -74,6 +101,13 @@ def detect_injection(user_input: str) -> InputStatus:
 # Return ``"ALLOW"`` if banking-related and OK.
 # ============================================================
 
+_EXTRA_BANKING_KEYWORDS = [
+    "bank", "vinbank", "money", "currency", "vnd", "card", "debit",
+    "mortgage", "fee", "branch", "hotline", "chuyen khoan", "rut tien",
+    "gui tien", "the ngan hang", "ky han",
+]
+
+
 def topic_filter(user_input: str) -> InputStatus:
     """Decide whether the input is on-topic for VinBank.
 
@@ -84,14 +118,26 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
-    input_lower = user_input.lower()
+    if not user_input or not user_input.strip():
+        return "BLOCK"
 
-    # TODO: Implement logic:
+    input_lower = _normalize_text(user_input).lower()
+    input_ascii = _strip_accents(input_lower)
+
     # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    for blocked in BLOCKED_TOPICS:
+        b_low = blocked.lower()
+        if b_low in input_lower or b_low in input_ascii:
+            return "BLOCK"
 
-    pass  # Replace with your implementation
+    # 2. If input contains any allowed banking topic -> return "ALLOW"
+    for allowed in ALLOWED_TOPICS + _EXTRA_BANKING_KEYWORDS:
+        a_low = allowed.lower()
+        if a_low in input_lower or a_low in input_ascii:
+            return "ALLOW"
+
+    # 3. Otherwise (off-topic) -> return "BLOCK"
+    return "BLOCK"
 
 
 # ============================================================
@@ -144,14 +190,25 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        if not text or not text.strip():
+            self.blocked_count += 1
+            return self._block_response(
+                "I cannot process an empty request. Please enter a VinBank banking question."
+            )
 
-        pass  # Replace with your implementation
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "I cannot process that request. I only help with VinBank banking questions."
+            )
+
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "I'm a VinBank assistant and can only help with banking-related questions."
+            )
+
+        return None
 
 
 # ============================================================

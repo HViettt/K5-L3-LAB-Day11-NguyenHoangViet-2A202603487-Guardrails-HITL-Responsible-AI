@@ -1,8 +1,27 @@
 # Day 11 — Controlled Agent Security (2026)
 
+> 👨‍🎓 **Họ và tên:** Nguyễn Hoàng Việt  
+> 🆔 **MSSV:** `2A202603487`  
+> 🏫 **Lớp / Khóa:** K5 — L3  
 > 👤 **Hình thức:** bài tập **cá nhân** (1 người / 1 MSSV).  
 > 🎯 **Mục tiêu:** đóng vai **Blue Team** để học cách xây Guardrails phòng thủ, rồi đóng vai **Red Team** để tấn công agent **Red** hoặc **Red Advance**.  
 > ✅ Làm theo **Checkpoint 1 → 5** trong [`CHECKPOINTS.md`](CHECKPOINTS.md) · nộp theo [`SUBMISSION.md`](SUBMISSION.md).
+
+## Thông tin bài nộp & Cách chạy nhanh
+
+```powershell
+# 1. Kích hoạt môi trường ảo
+.\.venv\Scripts\Activate.ps1
+
+# 2. Chạy từng phần Lab (Checkpoint 2 → 3 → 4)
+python src/main.py --part 2
+python src/main.py --part 3
+python src/main.py --part 4
+
+# 3. Chạy kiểm thử & tự chấm (Checkpoint 5)
+pytest tests/smoke tests/public -q
+python scripts/grade.py --submission-dir . --out outputs/grade_report.json
+```
 
 ---
 

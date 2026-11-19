@@ -86,62 +86,76 @@ class ConfidenceRouter:
         #      action="escalate", priority="high",
         #      requires_human=True, reason="Low confidence — escalating"
 
+        if action_type in HIGH_RISK_ACTIONS:
+            return RoutingDecision(
+                action="escalate",
+                confidence=confidence,
+                reason=f"High-risk action: {action_type}",
+                priority="high",
+                requires_human=True,
+            )
+
+        if confidence >= self.HIGH_THRESHOLD:
+            return RoutingDecision(
+                action="auto_send",
+                confidence=confidence,
+                reason="High confidence",
+                priority="low",
+                requires_human=False,
+            )
+
+        if confidence >= self.MEDIUM_THRESHOLD:
+            return RoutingDecision(
+                action="queue_review",
+                confidence=confidence,
+                reason="Medium confidence — needs review",
+                priority="normal",
+                requires_human=True,
+            )
+
         return RoutingDecision(
-            action="auto_send",
+            action="escalate",
             confidence=confidence,
-            reason="TODO: implement routing logic",
-            priority="low",
-            requires_human=False,
-        )  # TODO: Replace with implementation
+            reason="Low confidence — escalating",
+            priority="high",
+            requires_human=True,
+        )
 
 
 # ============================================================
 # Optional enrichment: 3 HITL decision points (không chấm)
-# Không bắt buộc điền. Tóm tắt bài nộp: chạy scripts/grade.py
-# (tự sinh lab_report.md) — không viết report tay.
-#
-# For each decision point, define:
-# - trigger: What condition activates this HITL check?
-# - hitl_model: Which model? (human-in-the-loop, human-on-the-loop,
-#   human-as-tiebreaker)
-# - context_needed: What info does the human reviewer need?
-# - example: A concrete scenario
-# - approval_path: What approve/reject/timeout decision is recorded?
-# - audit_fields: Which correlation ID, intent and proposed action/diff are logged?
-#
-# Think about real banking scenarios where human judgment is critical.
 # ============================================================
 
 hitl_decision_points = [
     {
         "id": 1,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "High-Value Interbank Wire Transfer Approval",
+        "trigger": "Action is 'transfer_money' or proposed transfer amount exceeds 50,000,000 VND or targets an unverified external beneficiary.",
+        "hitl_model": "human-in-the-loop",
+        "context_needed": "Customer KYC status, source & destination account numbers, transfer amount, 30-day transaction velocity, and untrusted input provenance (whether initiated by user or parsed from email/RAG).",
+        "example": "A customer asks the assistant to execute a 100,000,000 VND wire transfer to a first-time external recipient account.",
+        "approval_path": "Approve: issue signed approval_id (HITL-XXXXXXXX) and release to https://api.vinbank.example/v1/transfers. Reject: cancel transaction and notify customer. Timeout (15m): auto-cancel fail-closed.",
+        "audit_fields": "correlation_id, user_id, action='transfer_money', destination, payload_diff (before/after balance & beneficiary), reviewer_id, approval_id, decision_timestamp.",
     },
     {
         "id": 2,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Account Closure & Permanent Data Deletion",
+        "trigger": "Action is 'close_account' or 'delete_data', which permanently terminates banking services or purges customer records.",
+        "hitl_model": "human-in-the-loop",
+        "context_needed": "Account balance, pending settlements/loans, active credit cards, customer identity verification status, and full chat transcript.",
+        "example": "Customer requests immediate closure of their primary savings and current account along with GDPR/PDPD personal data deletion.",
+        "approval_path": "Approve: compliance officer verifies zero outstanding debt, logs HITL approval token, and schedules closure. Reject: hold account open and explain pending obligations. Timeout (24h): escalate to branch manager.",
+        "audit_fields": "correlation_id, user_id, action='close_account', account_state_diff, outstanding_liabilities_check, reviewer_id, approval_id, decision_reason.",
     },
     {
         "id": 3,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Ambiguous Policy / Low-Confidence Financial Advice & Credential Update",
+        "trigger": "Action is 'change_password' / 'update_personal_info' OR model confidence score falls below 0.90 (0.70–0.89 queued for review; <0.70 immediate escalation) or LLM-as-Judge flags potential rate hallucination.",
+        "hitl_model": "human-as-tiebreaker",
+        "context_needed": "User query, candidate LLM response, ground-truth VinBank rate sheet (4.25% 12m APY), confidence score, and guardrail/judge flags.",
+        "example": "Customer asks about a custom pledged-deposit loan rate where the model confidence is 0.65 and the draft response cites an unverified promotional APR.",
+        "approval_path": "Approve/Edit: human specialist corrects or approves the response before sending to customer. Reject: replace with standard official rate table and hotline 1900 545 467. Timeout (5m): send safe fallback message and create callback ticket.",
+        "audit_fields": "correlation_id, user_id, intent, confidence_score, draft_ vs_approved_response_diff, reviewer_id, decision_outcome.",
     },
 ]
 
